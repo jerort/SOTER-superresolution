@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comparador de Imágenes</title>
+    <link rel="stylesheet" href="https://unpkg.com/image-compare-viewer/dist/image-compare-viewer.min.css">
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="image-compare">
+            <img src="IMAGE_lq.jpg" alt="LQ" />
+            <img src="IMAGE_sr.jpg" alt="SR" />
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/image-compare-viewer/dist/image-compare-viewer.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            // Inicializa el comparador de imágenes
+            const viewers = document.querySelectorAll(".image-compare");
+            viewers.forEach(viewer => {
+                new ImageCompare(viewer, {
+                    // Opciones personalizables
+                    hoverStart: true, // Mueve el slider al pasar el ratón (opcional)
+                    startPosition: 50 // Posición inicial del slider (50% por defecto)
+                }).mount();
+            });
+        });
+    </script>
+
+</body>
+</html>

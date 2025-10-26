@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Comparador HQ vs LQ</title>
+
+  <!-- Image Compare Viewer (comportamiento original) -->
+  <link rel="stylesheet" href="https://unpkg.com/image-compare-viewer/dist/image-compare-viewer.min.css">
+  <script src="https://unpkg.com/image-compare-viewer/dist/image-compare-viewer.min.js"></script>
+
+  <!-- CSV parser -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      background-color: #f0f0f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 900px;
+      width: 100%;
+      background-color: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .row { display: grid; gap: 8px; }
+    .controls { display: grid; gap: 12px; }
+    label.file {
+      display: inline-block;
+      padding: 10px 14px;
+      background: #111827; color: #fff; border-radius: 10px;
+      cursor: pointer; font-weight: 600; text-align: center;
+      width: fit-content;
+    }
+    label.file input { display:none; }
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      background: #fff;
+    }
+    .muted { color:#666; font-size: 12px; }
+    .metrics { display: grid; gap: 8px; }
+    .metric-item { display:flex; justify-content:space-between; gap:12px; background:#f7f7f7; border:1px solid #eee; border-radius:8px; padding:8px 10px; }
+    .metric-item b { font-variant-numeric: tabular-nums; }
+    .hidden { display:none !important; }
+
+    /* Mantener visualización original: no forzar tamaños */
+    .image-compare { /* intencionalmente vacío */ }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="controls">
+      <div class="row">
+        <label class="file">
+          <input id="pick-hq" type="file" webkitdirectory directory multiple />
+          🖼️ Elegir carpeta <b>HQ</b>
+        </label>
+        <label class="file">
+          <input id="pick-lq" type="file" webkitdirectory directory multiple />
+          🖼️ Elegir carpeta <b>LQ</b>
+        </label>
+        <label class="file">
+          <input id="pick-csv" type="file" accept=".csv,text/csv" />
+          📄 (Opcional) Cargar <b>metrics.csv</b>
+        </label>
+        <div class="muted">
+          Selecciona HQ y LQ (ambas necesarias). El CSV es opcional; si lo cargas, se mostrarán sus métricas (ocultando las 2 primeras columnas y redondeando a 4 decimales).
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="file-select">Imagen (coincidente en HQ y LQ)</label>
+        <select id="file-select" disabled>
+          <option>— Selecciona HQ y LQ —</option>
+        </select>
+        <div id="counts" class="muted"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="image-compare">
+      <!-- Enfoque original: dos <img> en orden DOM -->
+      <img id="img-lq" alt="LQ" />
+      <img id="img-hq" alt="HQ" />
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row">
+      <div class="muted" id="metric-for">Métricas —</div>
+      <div id="metrics" class="metrics"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- Helpers ----------
+    const $ = s => document.querySelector(s);
+    const isImage = n => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(n);
+    const normPath = p => String(p).replace(/\\/g, '/'); // agnóstico del sistema
+    const basename = p => normPath(p).split('/').pop().replace(/\.[^.]+$/,'');
+    const round4 = v => {
+      if (typeof v === "number" && isFinite(v)) return Number(v.toFixed(4));
+      const n = Number(v); return Number.isFinite(n) ? Number(n.toFixed(4)) : v;
+    };
+
+    const state = {
+      hqMap: new Map(), // basename -> File
+      lqMap: new Map(),
+      metricsRows: [],
+      metricsHeader: [],
+      viewer: null
+    };
+
+    // ---------- Núcleo UI ----------
+    function setCounts() {
+      const common = [...state.hqMap.keys()].filter(k => state.lqMap.has(k));
+      $("#counts").textContent = `HQ: ${state.hqMap.size} · LQ: ${state.lqMap.size} · Coinciden: ${common.length}`;
+    }
+
+    function populateSelect() {
+      const select = $("#file-select");
+      select.innerHTML = "";
+      const common = [...state.hqMap.keys()].filter(k => state.lqMap.has(k))
+        .sort((a,b)=>a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}));
+
+      if (common.length === 0) {
+        select.disabled = true;
+        select.innerHTML = `<option>— No hay coincidencias entre HQ y LQ —</option>`;
+      } else {
+        select.disabled = false;
+        for (const k of common) {
+          const opt = document.createElement("option");
+          opt.value = k; opt.textContent = k;
+          select.appendChild(opt);
+        }
+        select.selectedIndex = 0;
+      }
+
+      setCounts();
+      if (!select.disabled && select.value) loadSelection(select.value);
+      else { clearViewer(); clearMetrics(); }
+    }
+
+    function clearViewer() {
+      $("#img-lq").src = "";
+      $("#img-hq").src = "";
+      state.viewer = null;
+    }
+
+    function loadSelection(key) {
+      const lq = state.lqMap.get(key);
+      const hq = state.hqMap.get(key);
+      if (!lq || !hq) return;
+
+      const lqSrc = URL.createObjectURL(lq);
+      const hqSrc = URL.createObjectURL(hq);
+
+      $("#img-lq").src = lqSrc;
+      $("#img-hq").src = hqSrc;
+
+      // ImageCompare con opciones mínimas (comportamiento original)
+      state.viewer = new ImageCompare(document.querySelector(".image-compare"), {
+        hoverStart: true,
+        startPosition: 50
+      });
+      state.viewer.mount();
+
+      renderMetricsFor(key);
+
+      setTimeout(()=>URL.revokeObjectURL(lqSrc), 10000);
+      setTimeout(()=>URL.revokeObjectURL(hqSrc), 10000);
+    }
+
+    function clearMetrics() {
+      $("#metric-for").textContent = "Métricas —";
+      $("#metrics").innerHTML = "";
+    }
+
+    function renderMetricsFor(key) {
+      const box = $("#metrics");
+      box.innerHTML = "";
+      $("#metric-for").textContent = `Métricas — archivo: ${key}`;
+
+      if (!state.metricsRows.length || !state.metricsHeader.length) {
+        box.innerHTML = `<div class="muted">Sin metrics.csv.</div>`;
+        return;
+      }
+
+      const [c0, c1] = state.metricsHeader;
+      const row = state.metricsRows.find(r =>
+        basename(String(r?.[c0] ?? "")) === key || basename(String(r?.[c1] ?? "")) === key
+      );
+
+      if (!row) {
+        box.innerHTML = `<div class="muted">Sin métricas para este archivo.</div>`;
+        return;
+      }
+
+      // Mostrar columnas excepto las 2 primeras, redondeando a 4 decimales
+      for (let i = 1; i < state.metricsHeader.length; i++) {
+        const col = state.metricsHeader[i];
+        const val = round4(row[col]);
+        const item = document.createElement("div");
+        item.className = "metric-item";
+        const kEl = document.createElement("span"); kEl.textContent = col;
+        const vEl = document.createElement("b");   vEl.textContent = String(val);
+        item.appendChild(kEl); item.appendChild(vEl);
+        box.appendChild(item);
+      }
+    }
+
+    // ---------- Carga / Lectura ----------
+    function collectFromFolder(fileList, intoMap) {
+      intoMap.clear();
+      Array.from(fileList).forEach(f => {
+        if (!isImage(f.name)) return;
+        const key = basename(f.name);
+        if (!intoMap.has(key) || f.size > (intoMap.get(key)?.size || 0)) intoMap.set(key, f);
+      });
+    }
+
+    async function loadCSVFile(file) {
+      const text = await file.text();
+      const parsed = Papa.parse(text, { header:true, dynamicTyping:true, skipEmptyLines:true });
+      state.metricsRows = parsed.data || [];
+      state.metricsHeader = parsed.meta?.fields || [];
+      // refrescar métricas si ya hay selección
+      const sel = $("#file-select");
+      if (!sel.disabled && sel.value) renderMetricsFor(sel.value);
+    }
+
+    // ---------- Eventos ----------
+    $("#pick-hq").addEventListener("change", (e) => {
+      collectFromFolder(e.target.files, state.hqMap);
+      populateSelect();
+      e.target.value = "";
+    });
+
+    $("#pick-lq").addEventListener("change", (e) => {
+      collectFromFolder(e.target.files, state.lqMap);
+      populateSelect();
+      e.target.value = "";
+    });
+
+    $("#pick-csv").addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      await loadCSVFile(f);
+      e.target.value = "";
+    });
+
+    $("#file-select").addEventListener("change", (e) => {
+      if (e.target.value) loadSelection(e.target.value);
+    });
+  </script>
+</body>
+</html>
